@@ -1,0 +1,369 @@
+---
+title: "treevizflextest"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(readr)
+library(RColorBrewer)
+library(patchwork)
+library(knitr)
+library(DT)
+library(webshot2)
+library(shiny)
+library(gt)
+library(kableExtra)
+library(reactable)
+library(stringr)
+library(lubridate)
+library(ggthemes)
+```
+
+```{r}
+#setwd("C:/Users/kseeger/OneDrive - DOI/Desktop/GIT_RSTUDIO/Flexdashboard/FlexDash")
+tree_basics <- read_csv(here::here("FLEXDASHBOARD", "TreeBasics_20221013.csv"))
+seedling_sapling <- read_csv(here::here("FLEXDASHBOARD", "SeedlingSapling_20221013.csv"))
+cwd_basics <- read_csv(here::here("FLEXDASHBOARD","CWD_Basics_20221013.csv"))
+canopy_cover <- read_csv(here::here("FLEXDASHBOARD","CanopyCover_20221021.csv"))
+#USNVC <- read_csv(here::here("FLEXDASHBOARD","USNVC_dev.csv")) old
+USNVC_parent <- read_csv(here::here("FLEXDASHBOARD","USNVC.csv"))
+constancy <- read_csv(here::here("FLEXDASHBOARD","Constancy_Data.csv"))
+constancy_full <- read_csv(here::here("FLEXDASHBOARD","Constancy_Data_Full.csv"))
+species_rich <- read_csv(here::here("FLEXDASHBOARD","SpeciesDiversity_LongFormat.csv"))
+genus <- read_csv(here::here("FLEXDASHBOARD", "CUPN_genus.csv"))
+
+```
+
+```{r}
+rv <- reactiveValues(
+  Spatial_Scale = NULL, 
+  Individual_Unit = NULL, 
+  Community_Group = NULL, 
+  plotly_tree = NULL
+)
+```
+
+```{r}
+tree_basics <- left_join(tree_basics, genus, by = "Plant_Code") 
+seedling_sapling <- left_join(seedling_sapling, genus, by = "Plant_Code")
+```
+
+```{r}
+#Tree_Basics 
+tree_basics_barplot <- tree_basics %>%
+  dplyr::filter(Event_Type_Name != "QA/QC") %>%
+  dplyr::group_by(Plot_Code,
+           Plant_Code, Genus,
+           Event_Type_Name,
+           Start_Date) %>%
+  dplyr::summarize(Tree = n())
+```
+
+```{r}
+
+wtf <- USNVC_parent %>%
+  dplyr::mutate(Community_1 = as.factor(Community_1)) %>%
+  dplyr::group_by(Plot_Code, Event_Type_Name, Community_1) %>%
+  dplyr::summarize(obs = n()) 
+
+wtflist <- wtf %>%
+  dplyr::filter(duplicated(Plot_Code))
+
+wtf <- USNVC_parent %>%
+  dplyr::filter(Plot_Code %in% wtflist$Plot_Code)
+```
+
+```{r}
+USNVC_parent <- USNVC_parent %>%
+  select(-c(Community_2, Community_3, Parent_2, Parent_3))
+```
+
+```{r}
+
+#Seedling Sapling Count 
+sapling_barplot <- seedling_sapling %>%
+  dplyr::filter(Event_Type_Name != "QA/QC") %>%
+  dplyr::select(Plot_Code, 
+         Plant_Code, Genus, 
+         Start_Date, 
+         Event_Type_Name, 
+         Sapling_0_1_DBH,
+         Sapling_1_2half_DBH, 
+         Sapling_2half_5_DBH,
+         Sapling_5_10_DBH) %>%
+  replace(is.na(.), 0) %>%
+  dplyr::mutate(SapCount = rowSums(across(where(is.numeric))))
+    
+sapling_barplot <- sapling_barplot %>%
+  dplyr::group_by(Plot_Code, 
+           Start_Date, 
+           Event_Type_Name,
+           Plant_Code, Genus) %>%
+  dplyr::summarize(Sapling = sum(SapCount))
+      
+#Seedling Count
+seedling_barplot <- seedling_sapling %>%
+  dplyr::filter(Event_Type_Name != "QA/QC") %>%
+#         Seedling_30_50_Tall != "514") %>% #getting rid of outlier
+  dplyr::select(Plot_Code,
+         Plant_Code, Genus,
+         Start_Date,
+         Event_Type_Name,
+         Seedling_15_30_Tall,
+         Seedling_5_15_Tall, 
+         Seedling_30_50_Tall,
+         Seedling_50_137_Tall) %>%
+  replace(is.na(.), 0) %>%
+  dplyr::mutate(SeedCount = rowSums(across(where(is.numeric))))
+    
+seedling_barplot <- seedling_barplot %>%
+  dplyr::group_by(Plot_Code, Start_Date, Event_Type_Name, Plant_Code, Genus) %>%
+  dplyr::summarize(Seedling = sum(SeedCount))
+ 
+#Creating table with sum counts woody strata 
+
+tree_full <- Reduce(function (...) { merge(..., all = TRUE) },  # Full join
+                           list(seedling_barplot,
+                                sapling_barplot,
+                                tree_basics_barplot))
+
+```
+
+```{r}
+tree_full <- left_join(USNVC_parent, tree_full, by = c("Plot_Code", "Start_Date", "Event_Type_Name"))
+
+tree_full <- tree_full %>%
+  dplyr::mutate_if(is.numeric, ~replace(., is.na(.), 0)) %>%
+  dplyr::mutate(Genus = as.factor(Genus))
+```
+
+```{r}
+tree_full <- tree_full %>%
+  pivot_longer(cols = c(Seedling, Sapling, Tree), 
+               names_to = "Strata", 
+               values_to = "Count")
+
+```
+
+```{r}
+
+
+### Stacked Bar Plot
+# don't touch
+
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", '#CC6677',"#D2CB63" , "#0072B2", "#D55E00", 
+               "#CC79A7", "#000000",'#DDDDDD', '#EE6678', '#99DDFF', 
+                '#332288', '#882255', '#FFAABB')
+                # "#AA6756" "#E59F00"    "#43ABB8"    "#B47676"    "#D2CB63"    "#AA6756"    "#CC79A6"    "#525252" "#EE808B"    "#87B5E6"    "#6E2169"    "#FFAABA" 
+#colorblind friendly palette
+
+color_pallete_function <- colorRampPalette(
+  colors = Okabe_Ito, 
+  space = "Lab")
+
+tree_birt <- tree_full %>%
+  filter(Plot_Code == "BIRT002") %>%
+  droplevels()
+
+num_colors <- nlevels(tree_birt$Genus)
+okabepalette <- color_pallete_function(num_colors)
+okabepalette <- setNames(okabepalette, levels(tree_birt$Genus))
+
+positions <- c("Seedling", "Sapling", "Tree")
+#p <- ggplot(theTable, aes(x = Position)) + scale_x_discrete(limits = positions)
+
+p <- tree_full %>%
+ filter(Park_Code == "ABLI", 
+        Community_1 == "Juniperus virginiana var. virginiana - (Quercus spp.) Forest"
+        ) %>%
+  dplyr::group_by(Strata, Genus) %>%
+  dplyr::summarize(Sum = sum(Count)) %>%
+  ungroup() %>%
+  
+  
+  ggplot(aes(x = Strata,
+             y = Sum, 
+             fill = Genus)) + 
+  geom_bar(position = "fill", #or stack for number, fill for proportion
+           stat = "identity") + 
+  theme_clean() + 
+  theme(legend.position="bottom") + #theme(legend.position = input$legendplacement) 
+  # labs(x = "", y = "") + 
+  # scale_fill_manual(values = okabepalette[unique(tree_birt$Genus)],
+  #                     drop = TRUE) + 
+  scale_x_discrete(limits = positions)
+
+```
+
+
+
+```{r action button} 
+# observeEvent(eventExpr = input$button_UpdateBarPlots, { 
+# 
+#   shiny::req(!is.null(input$groupone), !is.null(input$grouponename), !is.null(input$grouptwo), !is.null(input$grouptwoname))
+#   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
+#     cat("line766")
+#     
+#     rv$groupone = input$groupone
+#     rv$grouponename = input$grouponename
+#     rv$grouptwo = input$grouptwo
+#     rv$grouptwoname = input$grouptwoname
+#     
+# # ..... if  (input$groupone == "None") {
+# #      tree_group <- tree_full %>%
+# #   dplyr::filter(input$groupone == input$grouponename, 
+# #                 input$grouptwo == input$grouptwoname) %>%
+# #   dplyr::group_by(Strata, Genus) %>%
+# #   dplyr::summarize(Sum = sum(Count)) %>%
+# #   dplyr::group_by(Strata) %>%
+# #   top_n(8, Sum) %>%
+# #   droplevels() }  
+# #     else if.........   
+#     if (!is.null(input$groupone) & inputgrouptwo == "None") {
+#       tree_group <- tree_full %>%
+#   dplyr::filter(input$groupone == input$grouponename) %>%
+#   dplyr::group_by(Strata, Genus) %>%
+#   dplyr::summarize(Sum = sum(Count)) %>%
+#   dplyr::group_by(Strata) %>%
+#   top_n(8, Sum) %>%
+#   droplevels() 
+#     }
+#     else if (!is.null(input$groupone) & !is.null(inputgrouptwo)) {
+#       tree_birt <- tree_full %>%
+#   dplyr::filter(input$groupone == input$grouponename, 
+#                 input$grouptwo == input$grouptwoname) %>%
+#   dplyr::group_by(Strata, Genus) %>%
+#   dplyr::summarize(Sum = sum(Count)) %>%
+#   dplyr::group_by(Strata) %>%
+#   top_n(8, Sum) %>%
+#   droplevels() 
+#     
+#     }
+#       
+#       
+#  })
+#   
+# })
+#   
+```
+
+```{r}
+
+# input <- list() 
+# input$Spatial_Scale <- "Park_Code"
+# input$Individual_Unit <- "MACA"
+# input$Community_Group <- unique(tree_full$Community_1[tree_full$Park_Code == "MACA"])
+
+observeEvent(eventExpr = input$button_UpdatePlots, {
+  shiny::req(!is.null(tree_full), !is.null(input$Spatial_Scale), !is.null(input$Individual_Unit), !is.null(input$Community_Group))
+  
+  df_tree <- tree_full %>%
+    dplyr::filter(!!as.name(input$Spatial_Scale) == input$Individual_Unit) %>%
+    dplyr::filter(Community_1 %in% input$Community_Group) %>%
+    dplyr::group_by(Community_1, Strata, Genus) %>%
+    dplyr::summarize(Sum = sum(Count)) %>%
+    top_n(8, Sum) %>%
+    droplevels() 
+
+page_height = length(unique(df_tree$Community_1)) * 250 + 150
+  
+plot_tree <- df_tree %>%
+  ggplot(aes(x = Strata,
+             y = Sum, 
+             fill = Genus)) + 
+  geom_bar(position = "fill", #or stack for number, fill for proportion
+           stat = "identity") + 
+  theme_clean() + 
+  theme(legend.position="bottom") + #theme(legend.position = input$legendplacement) 
+  labs(x = "", y = "") + 
+  # scale_fill_manual(values = okabepalette[unique(tree_birt$Genus)],
+  #                     drop = TRUE) + 
+  scale_x_discrete(limits = positions) + 
+  facet_wrap(Community_1 ~., ncol = 1) 
+ 
+rv$plotly_tree <- ggplotly(plot_tree, height = page_height) %>%
+  layout(margin = list(
+    t=80,
+    b=90,
+    l= 100,
+    r=15))
+rv$plotly_tree[['x']][['layout']][['annotations']][[2]][['x']] <- 0.52 # -0.12 move y-axis title more to the left
+rv$plotly_tree[['x']][['layout']][['annotations']][[1]][['y']] <- -0.03 # move x-axis title down more. This affects the x-axis title specified in ggplot
+
+})
+```
+
+
+Inputs {.sidebar data-width=225}
+-------------------------------------
+```{r sidebar input}
+
+actionButton("button_UpdatePlots", "Update Plots") 
+
+
+selectInput(
+  "Spatial_Scale", 
+  label = "Select Spatial Scale: ",
+  choices = c("Network_Code", "Park_Code", "Subunit_Code")
+)
+
+#selectInput only shows column name when just one value is possible
+renderUI({ #needed bc reactive
+  shiny::req(!is.null(input$Spatial_Scale), !is.null(tree_full))
+  selectInput(
+    "Individual_Unit", 
+    label = paste0("Select Individual Unit of ", input$Spatial_Scale, ":" ), 
+    choices = unique(tree_full[input$Spatial_Scale])
+  )
+
+# input <- list()
+# input$Spatial_Scale <- "Network_Code"
+#   
+})
+
+renderUI({
+  shiny::req(!is.null(input$Spatial_Scale), !is.null(input$Individual_Unit), !is.null(tree_full))
+  communitychoice <- tree_full %>%
+    dplyr::filter(!!as.name(input$Spatial_Scale) == input$Individual_Unit) %>%
+    distinct(Community_1) %>%
+    pull(.)
+
+  
+  checkboxGroupInput(
+    "Community_Group", 
+    label = "Select at least one Community Group", 
+    choices = communitychoice
+  )
+  
+})
+```
+
+###
+-------------------------------------
+
+```{r}
+output$plotly_tree <- renderPlotly({rv$plotly_tree})
+
+plotlyOutput("plotly_tree")
+
+```
+
+
+
+
+<!-- #+ -->
+<!--  # scale_fill_manual(values = okabepalette[unique(tree_birt$Genus)], -->
+<!--                      # drop = TRUE) -->
+
+<!-- ``` -->
+
